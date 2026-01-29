@@ -1,17 +1,18 @@
 # Claude CLI GUI
 
-A graphical user interface for configuring and launching [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) sessions on Windows.
+A graphical user interface for configuring and launching [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) sessions on **Windows**, **macOS**, and **Linux**.
 
 ![Python](https://img.shields.io/badge/Python-3.x-blue.svg)
-![Platform](https://img.shields.io/badge/Platform-Windows-lightgrey.svg)
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 
 ## Features
 
+- **Cross-platform**: Runs on Windows, macOS, and Linux
 - **Full CLI Coverage**: Configure all Claude CLI options through an intuitive tabbed interface
 - **Live Command Preview**: See the generated command in real-time as you make changes
-- **One-Click Launch**: Launch Claude CLI directly in a new console window
-- **Copy to Clipboard**: Copy the configured command for use elsewhere
+- **One-Click Launch**: Launch Claude CLI in a new console/terminal window
+- **Copy to Clipboard**: Copy the configured command for use elsewhere (shell-quoted on Unix)
 - **Configurable Paths**: Set custom Claude CLI executable path and working directory
 - **No Dependencies**: Uses only Python standard library (Tkinter)
 
@@ -29,7 +30,7 @@ The GUI is organized into tabs for easy navigation:
 
 ## Requirements
 
-- Python 3.x (with Tkinter - included by default on Windows)
+- Python 3.x with Tkinter (included by default on most installs; on Linux you may need `python3-tk`)
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) installed
 
 ## Installation

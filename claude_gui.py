@@ -2,7 +2,8 @@
 """
 Claude CLI Configuration GUI
 
-A Tkinter-based GUI for configuring and launching Claude CLI sessions on Windows.
+A Tkinter-based GUI for configuring and launching Claude CLI sessions.
+Runs on Windows, macOS, and Linux.
 """
 
 import tkinter as tk
@@ -10,7 +11,10 @@ from tkinter import ttk, filedialog, messagebox, scrolledtext
 import subprocess
 import shutil
 import os
-import json
+import sys
+import shlex
+import tempfile
+import stat
 
 
 class ClaudeGUI:
@@ -31,6 +35,20 @@ class ClaudeGUI:
         # Update command preview initially
         self._update_command_preview()
 
+    def _get_safe_working_dir(self):
+        """Return a safe default working directory, avoiding system paths."""
+        cwd = os.getcwd()
+        if sys.platform == "win32":
+            cwd_lower = cwd.lower()
+            # Avoid Windows system directories (e.g. when launched as admin)
+            if "system32" in cwd_lower or "syswow64" in cwd_lower or cwd == os.path.splitdrive(cwd)[0] + os.sep:
+                return os.path.expanduser("~")
+        else:
+            # On Unix, avoid root (e.g. when launched from system context)
+            if cwd == "/":
+                return os.path.expanduser("~")
+        return cwd
+
     def _find_claude_path(self):
         """Find the Claude CLI executable path."""
         # First try PATH
@@ -38,18 +56,26 @@ class ClaudeGUI:
         if claude_path:
             return claude_path
 
-        # Try common locations
-        possible_paths = [
-            os.path.expanduser(r"~\.local\bin\claude.exe"),
-            os.path.expanduser(r"~\.local\bin\claude"),
-            os.path.expanduser(r"~\AppData\Local\Programs\claude\claude.exe"),
-            os.path.expanduser(r"~\AppData\Roaming\npm\claude.cmd"),
-        ]
+        # Try common locations per platform
+        if sys.platform == "win32":
+            possible_paths = [
+                os.path.expanduser(r"~\.local\bin\claude.exe"),
+                os.path.expanduser(r"~\.local\bin\claude"),
+                os.path.expanduser(r"~\AppData\Local\Programs\claude\claude.exe"),
+                os.path.expanduser(r"~\AppData\Roaming\npm\claude.cmd"),
+            ]
+        else:
+            possible_paths = [
+                os.path.expanduser("~/.local/bin/claude"),
+                "/usr/local/bin/claude",
+                "/opt/homebrew/bin/claude",
+                os.path.expanduser("~/.nvm/current/bin/claude"),
+            ]
         for p in possible_paths:
             if os.path.exists(p):
                 return p
 
-        # Default fallback
+        # Default fallback (rely on PATH when launched)
         return "claude"
 
     def _init_variables(self):
@@ -108,8 +134,8 @@ class ClaudeGUI:
         self.betas_var = tk.StringVar()
         self.no_session_persistence_var = tk.BooleanVar()
 
-        # Working directory
-        self.working_dir_var = tk.StringVar(value=os.getcwd())
+        # Working directory (avoid defaulting to system paths like System32)
+        self.working_dir_var = tk.StringVar(value=self._get_safe_working_dir())
 
     def _create_layout(self):
         """Create the main layout with notebook and bottom panel."""
@@ -162,9 +188,13 @@ class ClaudeGUI:
 
     def _browse_claude_path(self):
         """Browse for Claude CLI executable."""
+        if sys.platform == "win32":
+            filetypes = [("Executable files", "*.exe *.cmd *.bat"), ("All files", "*.*")]
+        else:
+            filetypes = [("Executable", "*"), ("All files", "*")]
         path = filedialog.askopenfilename(
             title="Select Claude CLI Executable",
-            filetypes=[("Executable files", "*.exe *.cmd *.bat"), ("All files", "*.*")]
+            filetypes=filetypes
         )
         if path:
             self.claude_path_var.set(path)
@@ -685,15 +715,17 @@ class ClaudeGUI:
         ttk.Button(btn_frame, text="Copy Command", command=self._copy_command).pack(side=tk.RIGHT)
 
     def _quote_arg(self, arg):
-        """Quote an argument for Windows command line if needed."""
+        """Quote an argument for command line display (platform-aware)."""
         if not arg:
-            return '""'
-        # Check if quoting is needed
-        if ' ' in arg or '"' in arg or '\t' in arg or '\n' in arg or any(c in arg for c in '&|<>^'):
-            # Escape existing double quotes and wrap in double quotes
-            escaped = arg.replace('"', '\\"')
-            return f'"{escaped}"'
-        return arg
+            return '""' if sys.platform == "win32" else "''"
+        if sys.platform == "win32":
+            # Windows: double quotes, escape "
+            if ' ' in arg or '"' in arg or '\t' in arg or '\n' in arg or any(c in arg for c in '&|<>^'):
+                escaped = arg.replace('"', '\\"')
+                return f'"{escaped}"'
+            return arg
+        # Unix: use shlex.quote for shell-safe display
+        return shlex.quote(arg)
 
     def _build_command(self):
         """Build the command list from current settings."""
@@ -894,19 +926,23 @@ class ClaudeGUI:
     def _launch_claude(self):
         """Launch Claude CLI with the configured options."""
         cmd = self._build_command()
-        working_dir = self.working_dir_var.get() or os.getcwd()
+        working_dir = self.working_dir_var.get().strip() or self._get_safe_working_dir()
 
         if not os.path.isdir(working_dir):
             messagebox.showerror("Error", f"Working directory does not exist: {working_dir}")
             return
 
         try:
-            # Launch with new console window on Windows
-            subprocess.Popen(
-                cmd,
-                cwd=working_dir,
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
+            if sys.platform == "win32":
+                # Windows: new console window
+                subprocess.Popen(
+                    cmd,
+                    cwd=working_dir,
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+            else:
+                # Unix: run in a new terminal so the user sees interactive output
+                self._launch_claude_unix(cmd, working_dir)
             messagebox.showinfo("Launched", "Claude CLI has been launched in a new window!")
         except FileNotFoundError:
             messagebox.showerror(
@@ -917,6 +953,63 @@ class ClaudeGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to launch Claude CLI:\n{e}")
 
+    def _launch_claude_unix(self, cmd, working_dir):
+        """Launch Claude CLI in a new terminal on Unix (macOS/Linux)."""
+        fd, script_path = tempfile.mkstemp(suffix=".sh", prefix="claude_gui_")
+        try:
+            # Script: cd to dir, run claude, then remove self
+            script_content = (
+                "#!/bin/sh\n"
+                "cd " + shlex.quote(working_dir) + " && "
+                + " ".join(shlex.quote(a) for a in cmd) + "\n"
+                "rm -f " + shlex.quote(script_path) + "\n"
+            )
+            os.write(fd, script_content.encode())
+            os.close(fd)
+            os.chmod(script_path, stat.S_IRWXU)
+        except OSError:
+            os.close(fd)
+            try:
+                os.remove(script_path)
+            except OSError:
+                pass
+            raise
+
+        launchers = []
+        if sys.platform == "darwin":
+            # macOS: use osascript so Terminal runs the script (open -a doesn't pass args well)
+            script_escaped = script_path.replace("\\", "\\\\").replace('"', '\\"')
+            launchers.append(["osascript", "-e", 'tell application "Terminal" to do script "sh ' + script_escaped + '"'])
+        # Linux and others: try common terminal emulators
+        launchers.extend([
+            ["x-terminal-emulator", "-e", "sh " + shlex.quote(script_path) + "; exec sh"],
+            ["gnome-terminal", "--", "sh", "-c", "sh " + shlex.quote(script_path) + "; exec bash"],
+            ["xterm", "-e", "sh " + shlex.quote(script_path) + "; exec sh"],
+            ["konsole", "-e", "sh", shlex.quote(script_path)],
+            ["xfce4-terminal", "-e", "sh " + shlex.quote(script_path) + "; exec sh"],
+        ])
+        for argv in launchers:
+            try:
+                exe = shutil.which(argv[0]) if not argv[0].startswith("/") else argv[0]
+                if exe and (os.path.exists(exe) if os.path.isabs(exe) else True):
+                    subprocess.Popen(argv, start_new_session=True)
+                    return
+            except (OSError, FileNotFoundError):
+                continue
+        # Fallback: run in background and clean up script
+        try:
+            subprocess.Popen(cmd, cwd=working_dir, start_new_session=True)
+        finally:
+            try:
+                os.remove(script_path)
+            except OSError:
+                pass
+        messagebox.showinfo(
+            "Launched in background",
+            "Claude CLI was started but no terminal was found to show output.\n\n"
+            "Run it from a terminal, or install a terminal emulator (e.g. gnome-terminal, xterm)."
+        )
+
     def _reset_all(self):
         """Reset all settings to defaults."""
         if not messagebox.askyesno("Confirm Reset", "Reset all settings to defaults?"):
@@ -924,6 +1017,7 @@ class ClaudeGUI:
 
         # Reset all variables
         self.claude_path_var.set(self._find_claude_path())
+        self.working_dir_var.set(self._get_safe_working_dir())
         self.prompt_var.set("")
         self.model_var.set("opus")
         self.fallback_model_var.set("")
